@@ -1,0 +1,160 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>roboArm dashboard</title>
+<style>
+  :root { --bg:#0d0f11; --panel:#15181b; --line:#3a3f45; --text:#e6e6e6; --accent:#6fd68a; --danger:#e06868; }
+  * { box-sizing: border-box; }
+  body { background:var(--bg); color:var(--text); font-family: ui-monospace, "Courier New", monospace; margin:0; padding:24px; }
+  h1 { text-align:center; font-weight:normal; font-size:18px; letter-spacing:1px; }
+  .panel { border:1px solid var(--line); border-radius:10px; padding:16px; max-width:640px; margin:0 auto; }
+  .box { border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:16px; }
+  .row { display:flex; gap:12px; }
+  .col { flex:1; }
+  .stats { display:grid; grid-template-columns: repeat(2,1fr); gap:6px 16px; font-size:13px; }
+  .stats span.k { color:#9aa0a6; }
+  button { background:transparent; color:var(--text); border:1px solid var(--line); border-radius:6px;
+           padding:10px; width:100%; font-family:inherit; cursor:pointer; margin-bottom:8px; }
+  button:hover { border-color:var(--accent); }
+  button.active { border-color:var(--accent); color:var(--accent); }
+  button.danger:hover { border-color:var(--danger); color:var(--danger); }
+  .label { font-size:12px; color:#9aa0a6; text-align:center; margin-bottom:6px; }
+  select, input[type=text] { width:100%; background:var(--panel); color:var(--text); border:1px solid var(--line);
+           border-radius:6px; padding:8px; margin-bottom:8px; font-family:inherit; }
+  .footer-row { display:flex; gap:12px; }
+</style>
+</head>
+<body>
+<h1>dashboard</h1>
+<div class="panel">
+
+  <div class="box stats" id="stats">
+    <span class="k">mode</span><span id="s-mode">-</span>
+    <span class="k">connected</span><span id="s-conn">-</span>
+    <span class="k">latency</span><span id="s-lat">-</span>
+    <span class="k">angles</span><span id="s-angles">-</span>
+    <span class="k">recording</span><span id="s-rec">-</span>
+    <span class="k">replaying</span><span id="s-replay">-</span>
+  </div>
+
+  <div class="row">
+    <div class="col box">
+      <div class="label">modes</div>
+      <button id="btn-live">live mode</button>
+      <button id="btn-replay-mode">replay mode</button>
+    </div>
+    <div class="col box">
+      <div class="label">replay profile</div>
+      <select id="profile-select"></select>
+      <input type="file" id="import-file" accept=".csv">
+      <button id="btn-import">import</button>
+      <button id="btn-export">export</button>
+    </div>
+  </div>
+
+  <div class="box">
+    <div class="label">live mode controls</div>
+    <button id="btn-record">start recording</button>
+    <button id="btn-replay-start">start replay (selected profile)</button>
+  </div>
+
+  <div class="footer-row">
+    <button class="danger" id="btn-stop">stop arm</button>
+    <button id="btn-home">start / home arm</button>
+  </div>
+
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({error: res.statusText}));
+    throw new Error(body.error || res.statusText);
+  }
+  const ct = res.headers.get('content-type') || '';
+  return ct.includes('application/json') ? res.json() : null;
+}
+
+let recording = false;
+
+async function refreshStats() {
+  try {
+    const s = await api('/api/stats');
+    $('s-mode').textContent = s.mode;
+    $('s-conn').textContent = s.connected ? 'yes' : 'NO — check UART';
+    $('s-lat').textContent = s.connected ? s.latency_ms + ' ms' : '-';
+    $('s-angles').textContent = s.angles.join(', ');
+    $('s-rec').textContent = s.recording ? `yes (${s.recorded_steps} steps)` : 'no';
+    $('s-replay').textContent = s.replaying ? 'yes' : 'no';
+
+    $('btn-live').classList.toggle('active', s.mode === 'live');
+    $('btn-replay-mode').classList.toggle('active', s.mode === 'replay');
+    recording = s.recording;
+    $('btn-record').textContent = recording ? 'stop recording' : 'start recording';
+  } catch (e) {
+    $('s-conn').textContent = 'server unreachable';
+  }
+}
+
+async function refreshProfiles() {
+  const profiles = await api('/api/profiles');
+  const sel = $('profile-select');
+  sel.innerHTML = '';
+  (profiles || []).forEach(p => {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = `${p.name} (${p.steps.length} steps)`;
+    sel.appendChild(opt);
+  });
+}
+
+$('btn-live').onclick = () => api('/api/mode', {method:'POST', body: JSON.stringify({mode:'live'})}).then(refreshStats);
+$('btn-replay-mode').onclick = () => api('/api/mode', {method:'POST', body: JSON.stringify({mode:'replay'})}).then(refreshStats);
+$('btn-home').onclick = () => api('/api/home', {method:'POST'}).then(refreshStats);
+$('btn-stop').onclick = () => api('/api/stop', {method:'POST'}).then(refreshStats);
+
+$('btn-record').onclick = async () => {
+  if (!recording) {
+    await api('/api/record/start', {method:'POST'});
+  } else {
+    const name = prompt('profile name', 'profile-' + Date.now());
+    if (name === null) return;
+    await api('/api/record/stop', {method:'POST', body: JSON.stringify({name})});
+    await refreshProfiles();
+  }
+  refreshStats();
+};
+
+$('btn-replay-start').onclick = async () => {
+  const id = parseInt($('profile-select').value, 10);
+  if (!id) { alert('no profile selected'); return; }
+  await api('/api/replay/start', {method:'POST', body: JSON.stringify({id})});
+  refreshStats();
+};
+
+$('btn-import').onclick = async () => {
+  const f = $('import-file').files[0];
+  if (!f) { alert('choose a CSV file first'); return; }
+  const form = new FormData();
+  form.append('file', f);
+  form.append('name', f.name.replace(/\.csv$/i, ''));
+  await api('/api/profiles/import', {method:'POST', body: form});
+  await refreshProfiles();
+};
+
+$('btn-export').onclick = () => {
+  const id = parseInt($('profile-select').value, 10);
+  if (!id) { alert('no profile selected'); return; }
+  window.location = '/api/profiles/export?id=' + id;
+};
+
+refreshStats();
+refreshProfiles();
+setInterval(refreshStats, 1000);
+</script>
+</body>
+</html>
