@@ -54,16 +54,22 @@ const (
 )
 
 // deadzone matches the python bridge's raw-axis threshold (~128 of
-// int16 range). tickScale is in deg10 (tenths of a degree) per UDP
-// packet at full stick deflection — arm.Jog only updates in-memory
-// target state per call now (actual wire sends are paced separately
-// by arm's jogFlusher), so this just controls how fast the target
-// angle accumulates while the stick is held, not wire traffic.
-// First-pass guess — tune on hardware, this is the one constant most
-// likely to need adjusting for jog to feel right.
+// int16 range). tickScaleMin/Max are in deg10 (tenths of a degree) per
+// UDP packet — arm.Jog only updates in-memory target state per call
+// now (actual wire sends are paced separately by arm's jogFlusher), so
+// this just controls how fast the target angle accumulates per packet
+// while the stick is held, not wire traffic. The bridge now sends
+// continuously at a fixed rate (tools/xbox_bridge.py, --rate, default
+// 50Hz) rather than only on value-change events, so scaling this by
+// how far the stick is pushed gives proportional speed control instead
+// of every jog moving at one fixed rate. First-pass guess — tune on
+// hardware, these are the constants most likely to need adjusting for
+// jog to feel right.
 const (
-	deadzone  = 3000 // out of ±32767
-	tickScale = 15   // deg10 per packet at full stick deflection (= 1.5 deg)
+	deadzone      = 3000 // out of ±32767
+	tickScaleMin  = 3    // deg10 per packet just past the deadzone (= 0.3 deg)
+	tickScaleMax  = 20   // deg10 per packet at full stick deflection (= 2.0 deg)
+	axisFullScale = 32767
 )
 
 func Listen(addr string, a *arm.Arm) error {
@@ -123,13 +129,26 @@ func Listen(addr string, a *arm.Arm) error {
 }
 
 func axisToDelta(v int) int16 {
-	if v > -deadzone && v < deadzone {
+	mag := v
+	if mag < 0 {
+		mag = -mag
+	}
+	if mag < deadzone {
 		return 0
 	}
-	if v > 0 {
-		return tickScale
+
+	// Linear ramp from tickScaleMin (just past deadzone) to tickScaleMax
+	// (full deflection), so how hard the stick is pushed controls jog speed.
+	span := axisFullScale - deadzone
+	scaled := tickScaleMin + (tickScaleMax-tickScaleMin)*(mag-deadzone)/span
+	if scaled > tickScaleMax {
+		scaled = tickScaleMax
 	}
-	return -tickScale
+
+	if v < 0 {
+		return -int16(scaled)
+	}
+	return int16(scaled)
 }
 
 func clampInt(v, lo, hi int) int {

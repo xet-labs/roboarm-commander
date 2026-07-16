@@ -43,6 +43,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/stats", s.handleStats)
 	s.mux.HandleFunc("/api/mode", s.handleSetMode)
 	s.mux.HandleFunc("/api/jog", s.handleJog)
+	s.mux.HandleFunc("/api/joint", s.handleSetJoint)
 	s.mux.HandleFunc("/api/claw", s.handleClaw)
 	s.mux.HandleFunc("/api/home", s.handleHome)
 	s.mux.HandleFunc("/api/stop", s.handleStop)
@@ -94,12 +95,13 @@ func (s *Server) handleSetMode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, s.arm.Stats())
 }
 
-// POST /api/jog {"base":0,"shoulder":0,"elbow":0,"wrist":0} — manual
-// on-screen jog buttons; the Xbox bridge calls arm.Jog directly via the
-// xbox package, not through this endpoint. Units: deg10 (tenths of a
-// degree), matching arm.Jog's signature — NOT sent yet by index.html
-// (no on-screen jog UI exists currently), so this is unreachable today,
-// but keep the unit documented here for whoever wires it up.
+// POST /api/jog {"base":0,"shoulder":0,"elbow":0,"wrist":0} — relative
+// jog deltas, deg10 (tenths of a degree). This is what the Xbox bridge
+// uses internally via arm.Jog directly (not through HTTP). The
+// dashboard's on-screen joint controls use /api/joint instead (see
+// handleSetJoint) since sliders/typed values are naturally absolute,
+// not relative — this endpoint is kept for anything that wants
+// relative nudges instead.
 func (s *Server) handleJog(w http.ResponseWriter, r *http.Request) {
 	var body struct{ Base, Shoulder, Elbow, Wrist int16 }
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -111,6 +113,32 @@ func (s *Server) handleJog(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/claw {"direction":-1|0|1,"duty":180}
+// POST /api/joint {"joint":0-3,"deg":123.4} — dashboard slider/typed-value
+// control for a single joint's absolute angle. deg is plain degrees
+// (not deg10), converted at this boundary — same convention as
+// Stats() and CSV import/export. Requires Live mode (same gating as
+// jog/xbox control); the ESP32 firmware clamps the final value to its
+// real per-joint limits regardless of what's sent here.
+func (s *Server) handleSetJoint(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("POST only"))
+		return
+	}
+	var body struct {
+		Joint int     `json:"joint"`
+		Deg   float64 `json:"deg"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.arm.SetJointDeg(body.Joint, body.Deg); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, s.arm.Stats())
+}
+
 func (s *Server) handleClaw(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Direction int8

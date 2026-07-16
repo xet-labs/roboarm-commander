@@ -173,6 +173,47 @@ func (a *Arm) Jog(deltaBase, deltaShoulder, deltaElbow, deltaWrist int16) {
 	}
 }
 
+// SetJointDeg sets joint i (0=Base 1=Shoulder 2=Elbow 3=Wrist, matching
+// protocol.JointBase..JointWrist) to an absolute angle in plain degrees
+// — this is the dashboard slider/typed-value entry point, as opposed
+// to Jog's relative deltas from the xbox bridge. Deliberately reuses
+// Jog's exact architecture: only in-memory target state is updated
+// here (gated to Live mode, same as Jog), and the existing jogFlusher
+// paces the actual wire send. That matters because a dragged slider
+// can fire many change events per second — without this, each drag
+// event would otherwise need its own send and could flood the
+// firmware's 16-deep command queue exactly like ungoverned jog packets
+// would.
+//
+// The AngleMinDeg10/AngleMaxDeg10 clamp here is a loose global
+// backstop only — the ESP32 firmware clamps for real per-joint via its
+// own kJointLimits (config.h) on receipt, so an out-of-range typed
+// value can't reach hardware; this just keeps a.angles sane in the
+// meantime.
+func (a *Arm) SetJointDeg(joint int, deg float64) error {
+	if joint < 0 || joint >= protocol.JointCount {
+		return fmt.Errorf("arm: joint must be 0-%d", protocol.JointCount-1)
+	}
+	deg10 := clamp16(int16(deg*10.0), AngleMinDeg10, AngleMaxDeg10)
+
+	a.mu.Lock()
+	if a.mode != ModeLive {
+		a.mu.Unlock()
+		return fmt.Errorf("arm: setting joint angle requires live mode (current: %s)", a.mode)
+	}
+	changed := a.angles[joint] != deg10
+	if changed {
+		a.angles[joint] = deg10
+		a.dirty = true
+	}
+	a.mu.Unlock()
+
+	if changed {
+		a.maybeRecord()
+	}
+	return nil
+}
+
 // jogFlusher sends the current target angles as one MoveAll frame,
 // at most once per jogFlushInterval, only while dirty and in Live mode.
 func (a *Arm) jogFlusher() {
