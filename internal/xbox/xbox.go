@@ -29,11 +29,23 @@ import (
 	"github.com/xet-labs/roboarm-commander/internal/arm"
 )
 
-// Packet mirrors tools/xbox_bridge.py's JSON output.
+// Packet mirrors tools/xbox_bridge.py's JSON output. Each field needs
+// its OWN tag on its own line — `LX, LY, RX, RY int `json:"lx"“ looks
+// like it works but silently applies "lx" to all four fields, which
+// makes them ambiguous JSON keys that encoding/json refuses to
+// populate at all. Caught by `go vet`, not by inspection — this would
+// have meant every axis but possibly one reading zero forever, with no
+// error, no panic, just an arm that doesn't jog. Worth remembering:
+// this exact shape (comma-joined field list + single tag) is worth a
+// second look anywhere else it appears.
 type Packet struct {
-	LX, LY, RX, RY int     `json:"lx" `
-	LT, RT         int     `json:"lt"`
-	Buttons        uint16  `json:"buttons"`
+	LX      int    `json:"lx"`
+	LY      int    `json:"ly"`
+	RX      int    `json:"rx"`
+	RY      int    `json:"ry"`
+	LT      int    `json:"lt"`
+	RT      int    `json:"rt"`
+	Buttons uint16 `json:"buttons"`
 }
 
 const (
@@ -42,13 +54,16 @@ const (
 )
 
 // deadzone matches the python bridge's raw-axis threshold (~128 of
-// int16 range); tick scale controls how many degrees/sec a full stick
-// deflection produces at the poll rate the bridge sends at (~60Hz from
-// the original evdev script, throttle further in the bridge if jog feels
-// too twitchy on hardware — easier to tune there than here).
+// int16 range). tickScale is in deg10 (tenths of a degree) per UDP
+// packet at full stick deflection — arm.Jog only updates in-memory
+// target state per call now (actual wire sends are paced separately
+// by arm's jogFlusher), so this just controls how fast the target
+// angle accumulates while the stick is held, not wire traffic.
+// First-pass guess — tune on hardware, this is the one constant most
+// likely to need adjusting for jog to feel right.
 const (
-	deadzone  = 3000  // out of ±32767
-	tickScale = 3     // degrees per packet at full stick deflection
+	deadzone  = 3000 // out of ±32767
+	tickScale = 15   // deg10 per packet at full stick deflection (= 1.5 deg)
 )
 
 func Listen(addr string, a *arm.Arm) error {
@@ -107,7 +122,7 @@ func Listen(addr string, a *arm.Arm) error {
 	return nil
 }
 
-func axisToDelta(v int) int {
+func axisToDelta(v int) int16 {
 	if v > -deadzone && v < deadzone {
 		return 0
 	}

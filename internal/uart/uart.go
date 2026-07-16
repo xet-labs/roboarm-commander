@@ -76,8 +76,11 @@ func (l *Link) Frames() <-chan protocol.Frame {
 func (l *Link) Send(f protocol.Frame) error {
 	l.writeMu.Lock()
 	defer l.writeMu.Unlock()
-	_, err := l.port.Write(protocol.Encode(f))
+	wire, err := protocol.Encode(f)
 	if err != nil {
+		return fmt.Errorf("uart: encode: %w", err)
+	}
+	if _, err := l.port.Write(wire); err != nil {
 		return fmt.Errorf("uart: write: %w", err)
 	}
 	return nil

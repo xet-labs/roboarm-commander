@@ -96,9 +96,12 @@ func (s *Server) handleSetMode(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/jog {"base":0,"shoulder":0,"elbow":0,"wrist":0} — manual
 // on-screen jog buttons; the Xbox bridge calls arm.Jog directly via the
-// xbox package, not through this endpoint.
+// xbox package, not through this endpoint. Units: deg10 (tenths of a
+// degree), matching arm.Jog's signature — NOT sent yet by index.html
+// (no on-screen jog UI exists currently), so this is unreachable today,
+// but keep the unit documented here for whoever wires it up.
 func (s *Server) handleJog(w http.ResponseWriter, r *http.Request) {
-	var body struct{ Base, Shoulder, Elbow, Wrist int }
+	var body struct{ Base, Shoulder, Elbow, Wrist int16 }
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
