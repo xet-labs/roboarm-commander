@@ -96,6 +96,12 @@ type Arm struct {
 
 	connected bool
 	latencyMs int
+
+	// last claw state actually sent to the wire, so ClawSet can skip
+	// redundant sends — see ClawSet below.
+	clawSent     bool
+	lastClawMode byte
+	lastClawDuty byte
 }
 
 func New(link *uart.Link) *Arm {
@@ -387,6 +393,17 @@ func (a *Arm) EmergencyStop() {
 // ClawSet: direction >0 closes, <0 opens, 0 stops — mirrors the xbox
 // package's RT/LT convention. Internally mapped to the firmware's
 // mode enum (0=stop 1=close 2=open).
+//
+// Debounced like Jog/SetJointDeg: the xbox bridge calls this on every
+// UDP packet (continuously, ~50Hz, including the neutral/no-trigger
+// case which used to resolve to ClawSet(0,0) every single tick), and
+// the web dashboard's slider can fire many events per second too.
+// Without a skip-if-unchanged check here, that unconditionally hits
+// the wire far faster than the firmware's 16-deep command queue can
+// drain (it shares that queue with jog moves), flooding it with
+// redundant "still stopped"/"still closing" frames — which is what
+// was actually behind the "command queue full" / "frame channel
+// full" spam, not just contention with the debug CLI's demo mode.
 func (a *Arm) ClawSet(direction int8, duty byte) {
 	var mode byte
 	switch {
@@ -397,6 +414,17 @@ func (a *Arm) ClawSet(direction int8, duty byte) {
 	default:
 		mode = 0
 	}
+
+	a.mu.Lock()
+	if a.clawSent && mode == a.lastClawMode && duty == a.lastClawDuty {
+		a.mu.Unlock()
+		return
+	}
+	a.clawSent = true
+	a.lastClawMode = mode
+	a.lastClawDuty = duty
+	a.mu.Unlock()
+
 	if err := a.link.Send(protocol.ClawSetFrame(mode, duty)); err != nil {
 		log.Printf("[arm] claw send failed: %v", err)
 	}
