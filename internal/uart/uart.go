@@ -55,6 +55,20 @@ func (l *Link) readLoop() {
 			log.Printf("[uart] read error (will keep retrying): %v", err)
 			continue
 		}
+
+		// Only RspState is ever awaited (statePoller's GetState
+		// round-trip below). ACK/ERR/PONG are fire-and-forget — every
+		// jog/claw send gets one, and at teleop rates that's dozens
+		// per second with nobody reading them. Queuing those anyway
+		// meant they crowded out the RspState replies statePoller
+		// actually waits for, so the 16-deep channel filled with
+		// stale ACKs and legitimately-needed state frames got dropped
+		// instead. If a future caller needs ACK/ERR, give it its own
+		// channel rather than widening this filter back out.
+		if f.Cmd != protocol.RspState {
+			continue
+		}
+
 		select {
 		case l.frames <- f:
 		default:
@@ -65,10 +79,10 @@ func (l *Link) readLoop() {
 	}
 }
 
-// Frames delivers every successfully decoded frame from the ESP32,
-// including CmdState responses. Callers needing a specific response
+// Frames delivers decoded RspState frames from the ESP32 (see
+// readLoop's filtering above). Callers needing a specific response
 // (e.g. GetState round-trip) should drain this channel with a select
-// against a timeout — see arm.Arm.pollState for the pattern.
+// against a timeout — see arm.Arm.statePoller for the pattern.
 func (l *Link) Frames() <-chan protocol.Frame {
 	return l.frames
 }
@@ -76,8 +90,11 @@ func (l *Link) Frames() <-chan protocol.Frame {
 func (l *Link) Send(f protocol.Frame) error {
 	l.writeMu.Lock()
 	defer l.writeMu.Unlock()
-	_, err := l.port.Write(protocol.Encode(f))
+	wire, err := protocol.Encode(f)
 	if err != nil {
+		return fmt.Errorf("uart: encode: %w", err)
+	}
+	if _, err := l.port.Write(wire); err != nil {
 		return fmt.Errorf("uart: write: %w", err)
 	}
 	return nil

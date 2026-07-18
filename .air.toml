@@ -1,0 +1,19 @@
+root = "."
+tmp_dir = "storage/tmp"
+
+[build]
+entrypoint = "storage/tmp/app"
+cmd = "go build -o storage/tmp/app ./cmd/roboarm/main.go"
+delay = 1000
+
+[log]
+time = true
+color = true
+prefix = "air:"
+
+[watch]
+extensions = ["go", "tpl", "tmpl", "html", "toml", "yaml"]
+ignore = ["vendor", "node_modules"]
+
+[screen]
+clear_on_rebuild = true

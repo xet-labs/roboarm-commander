@@ -12,9 +12,9 @@ import (
 )
 
 type Profile struct {
-	ID        int64     `json:"id"`
-	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        int64      `json:"id"`
+	Name      string     `json:"name"`
+	CreatedAt time.Time  `json:"created_at"`
 	Steps     []arm.Step `json:"steps"`
 }
 

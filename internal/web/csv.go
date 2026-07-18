@@ -10,11 +10,15 @@ import (
 	"github.com/xet-labs/roboarm-commander/internal/arm"
 )
 
-// exportCSV writes steps in the project's original dataset shape:
+// exportCSV / importCSV convert at the file boundary: internal Step
+// storage is deg10 (matches wire protocol), but the CSV interchange
+// format is plain degrees — matching the original project dataset
+// shape from the brief (`time,s0,s1,s2,s3` / `0012,68,70,50,39`),
+// which is also just friendlier to read/edit by hand.
 //
 //	time,s0,s1,s2,s3
-//	0,90,90,90,90
-//	120,91,90,89,90
+//	0,90.0,90.0,90.0,90.0
+//	120,91.2,90.0,88.5,90.0
 //	...
 func exportCSV(w io.Writer, steps []arm.Step) error {
 	bw := bufio.NewWriter(w)
@@ -24,8 +28,12 @@ func exportCSV(w io.Writer, steps []arm.Step) error {
 		return err
 	}
 	for _, s := range steps {
-		if _, err := fmt.Fprintf(bw, "%d,%d,%d,%d,%d\n",
-			s.TMs, s.Angles[0], s.Angles[1], s.Angles[2], s.Angles[3]); err != nil {
+		if _, err := fmt.Fprintf(bw, "%d,%.1f,%.1f,%.1f,%.1f\n",
+			s.TMs,
+			float64(s.Angles[0])/10.0,
+			float64(s.Angles[1])/10.0,
+			float64(s.Angles[2])/10.0,
+			float64(s.Angles[3])/10.0); err != nil {
 			return err
 		}
 	}
@@ -36,6 +44,8 @@ func importCSV(r io.Reader) ([]arm.Step, error) {
 	sc := bufio.NewScanner(r)
 	var steps []arm.Step
 	lineNo := 0
+
+	const degMin, degMax = 0.0, 180.0 // human-readable bound at the CSV boundary
 
 	for sc.Scan() {
 		lineNo++
@@ -60,14 +70,14 @@ func importCSV(r io.Reader) ([]arm.Step, error) {
 		var step arm.Step
 		step.TMs = t
 		for i := 0; i < 4; i++ {
-			v, err := strconv.Atoi(strings.TrimSpace(fields[i+1]))
+			v, err := strconv.ParseFloat(strings.TrimSpace(fields[i+1]), 64)
 			if err != nil {
 				return nil, fmt.Errorf("csv line %d: bad angle value: %w", lineNo, err)
 			}
-			if v < arm.AngleMin || v > arm.AngleMax {
-				return nil, fmt.Errorf("csv line %d: angle %d out of range [%d,%d]", lineNo, v, arm.AngleMin, arm.AngleMax)
+			if v < degMin || v > degMax {
+				return nil, fmt.Errorf("csv line %d: angle %.1f out of range [%.0f,%.0f]", lineNo, v, degMin, degMax)
 			}
-			step.Angles[i] = v
+			step.Angles[i] = int16(v * 10.0)
 		}
 		steps = append(steps, step)
 	}
