@@ -98,6 +98,7 @@ the `replace` directives already in `go.mod` route around it via
 ```bash
 ./roboarm --uart /dev/ttyUSB0 --baud 115200 --web :8080 --xbox 127.0.0.1:9999
 python3 tools/xbox_bridge.py --host 127.0.0.1 --port 9999
+python3 tools/vision_servo.py --camera tcp://10.42.1.1:5000 --kp 3 --max-step-deg 5 --deadzone-px 35 --rate 4 --headless --proc-scale 0.35
 ```
 
 Then open `http://<pi-ip>:8080`.
